@@ -10,20 +10,13 @@ use sngrl\PhpFirebaseCloudMessaging\Recipient\Device;
  */
 class Message implements \JsonSerializable
 {
-    /**
-     * Maximum topics and devices: https://firebase.google.com/docs/cloud-messaging/http-server-ref#send-downstream
-     */
-    const MAX_TOPICS = 3;
-    const MAX_DEVICES = 1000;
-    
     private $notification;
-    private $collapseKey;    
+    private $collapseKey;
     private $priority;
     private $data;
     private $recipients = [];
-    private $recipientType;    
+    private $recipientType;
     private $jsonData;
-    private $condition;
 
 
     public function __construct() {
@@ -72,22 +65,6 @@ class Message implements \JsonSerializable
     public function setData(array $data)
     {
         $this->data = $data;
-        return $this;
-    }
-            
-    /**
-     * Specify a condition pattern when sending to combinations of topics
-     * https://firebase.google.com/docs/cloud-messaging/topic-messaging#sending_topic_messages_from_the_server
-     *
-     * Examples:
-     * "%s && %s" > Send to devices subscribed to topic 1 and topic 2
-     * "%s && (%s || %s)" > Send to devices subscribed to topic 1 and topic 2 or 3
-     *
-     * @param string $condition
-     * @return $this
-     */
-    public function setCondition($condition) {
-        $this->condition = $condition;
         return $this;
     }
 
@@ -164,15 +141,15 @@ class Message implements \JsonSerializable
         if (empty($this->recipients)) {
             throw new \UnexpectedValueException('Message must have at least one recipient');
         }
-        
-        if (count($this->recipients) == 1) {
-            $jsonData['to'] = $this->createTarget();    
-        } elseif ($this->recipientType == Device::class) {
-            $jsonData['registration_ids'] = $this->createTarget();
-        } else {
-            $jsonData['condition'] = $this->createTarget();
-        }       
-        
+
+        $tokens = $this->createTo();
+        if(is_array($tokens)){
+            $tokens_key = 'registration_ids';
+        }else{
+            $tokens_key = 'to';
+        }
+
+        $jsonData[$tokens_key] =  $tokens;
         if ($this->collapseKey) {
             $jsonData['collapse_key'] = $this->collapseKey;
         }
@@ -189,53 +166,34 @@ class Message implements \JsonSerializable
         return $jsonData;
     }
 
-    private function createTarget()
+    private function createTo()
     {
-        $recipientCount = count($this->recipients);
-        
         switch ($this->recipientType) {
-                
             case Topic::class:
-                
-                if ($recipientCount == 1) {
-                    return sprintf('/topics/%s', current($this->recipients)->getName());    
-                    
-                } else if ($recipientCount > self::MAX_TOPICS) {
-                    throw new \OutOfRangeException(sprintf('Message topic limit exceeded. Firebase supports a maximum of %u topics.', self::MAX_TOPICS));
-                    
-                } else if (!$this->condition) {
-                    throw new \InvalidArgumentException('Missing message condition. You must specify a condition pattern when sending to combinations of topics.');
-                    
-                } else if ($recipientCount != substr_count($this->condition, '%s')) {                    
-                    throw new \UnexpectedValueException('The number of message topics must match the number of occurrences of "%s" in the condition pattern.');
-                    
-                } else {
-                    $names = [];
-                    foreach ($this->recipients as $recipient) {
-                        $names[] = vsprintf("'%s' in topics", $recipient->getName());
-                    }
-                    return vsprintf($this->condition, $names);
-                }                
-                break;
-
-            case Device::class:
-                
-                if ($recipientCount == 1) { 
-                    return current($this->recipients)->getToken();
-                    
-                } else if ($recipientCount > self::MAX_DEVICES) {
-                    throw new \OutOfRangeException(sprintf('Message device limit exceeded. Firebase supports a maximum of %u devices.', self::MAX_DEVICES));
-                    
-                } else {
-                    $ids = [];
-                    foreach ($this->recipients as $recipient) {                        
-                        $ids[] = $recipient->getToken();
-                    }
-                    return $ids;
+                if (count($this->recipients) > 1) {
+                    throw new \UnexpectedValueException(
+                        'Currently messages to target multiple topics do not work, but its obviously planned: '.
+                        'https://firebase.google.com/docs/cloud-messaging/topic-messaging#sending_topic_messages_from_the_server'
+                    );
                 }
+                return sprintf('/topics/%s', current($this->recipients)->getName());
                 break;
-                
+            case Device::class:
+                $count = count($this->recipients);
+                if($count == 1){
+                    return current($this->recipients)->getToken();
+                }elseif($count > 1){
+                    $tokens = [];
+                    foreach($this->recipients as $recipient){
+                        $tokens[] = $recipient->getToken();
+                    }
+
+                    return $tokens;
+                }
+
+                break;
             default:
+                throw new \UnexpectedValueException('PhpFirebaseCloudMessaging only supports single topic and single device messages yet');
                 break;
         }
         return null;
